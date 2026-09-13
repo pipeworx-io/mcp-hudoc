@@ -1,0 +1,18 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.pipeworx-io/hudoc",
+  "title": "Hudoc",
+  "description": "HUDOC MCP — European Court of Human Rights (ECHR / Strasbourg) case law.",
+  "version": "0.1.0",
+  "websiteUrl": "https://pipeworx.io/packs/hudoc",
+  "repository": {
+    "url": "https://github.com/pipeworx-io/mcp-hudoc",
+    "source": "github"
+  },
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://gateway.pipeworx.io/hudoc/mcp"
+    }
+  ]
+}
