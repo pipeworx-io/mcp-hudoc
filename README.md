@@ -72,6 +72,16 @@ Both URLs reach the same gateway and the same 1576+ data sources. The
 only difference is which pack's tools are listed **directly**; `ask_pipeworx`
 reaches all of them from either one.
 
+## No MCP client? Call it over HTTP
+
+```bash
+curl -X POST https://gateway.pipeworx.io/v1/tools/echr_search \
+  -H 'Content-Type: application/json' \
+  -d '{"article":"8","respondent":"GBR","date_from":"2024-01-01","date_to":"2026-12-31","limit":5}'
+```
+
+No account needed for the first calls. Inspect any tool: `GET https://gateway.pipeworx.io/v1/tools/echr_search`. Find one: `POST https://gateway.pipeworx.io/v1/tools/search_packs` with `{"query":"..."}`.
+
 ## Standalone (no gateway account)
 
 This package also runs as a local stdio MCP server — no Pipeworx account, no
