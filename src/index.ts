@@ -693,6 +693,39 @@ async function pwFetch(url: string | URL, init?: RequestInit): Promise<Response>
   return fetchWithTimeout(url, { ...init, headers }, 'HUDOC (ECHR)');
 }
 
+/**
+ * hudoc.echr.coe.int fronts itself with Cloudflare, which occasionally answers
+ * a legitimate request with a short-lived bot-defense challenge (HTTP 403,
+ * "Just a moment..." interstitial — confirmed live 2026-10-15, fleet #3119: a
+ * direct probe got the Cloudflare challenge page 5/5 times from one vantage,
+ * while the gateway's own calls with the SAME args mostly succeeded) instead
+ * of the JSON search API. Every live re-check during diagnosis succeeded on
+ * the very next attempt seconds later, so the block clears fast.
+ *
+ * The monitor's OWN retry (workers/monitor/src/index.ts,
+ * probeKeylessPackWithRetry) fires with ZERO delay between attempts, so it
+ * reliably lands inside the same still-active window rather than past it —
+ * the exact "both attempts fail together" shape behind 84/84
+ * `upstream_throttled` rows logged for caller `internal:monitor` over the
+ * preceding 30 days, while real callers (spread naturally over time) mostly
+ * never hit two in a row. A short in-pack backoff on 403/429/503 — the three
+ * statuses a WAF challenge or rate limit can answer with; HUDOC's JSON API
+ * has no auth concept that would make a LEGITIMATE 403 possible — gives the
+ * challenge time to clear before either the caller's retry or this one gives
+ * up, rather than guaranteeing both attempts land in the same window.
+ */
+const RETRYABLE_STATUSES = new Set([403, 429, 503]);
+
+async function pwFetchWithRetry(url: string | URL, init?: RequestInit, attempts = 3): Promise<Response> {
+  let res: Response;
+  for (let i = 0; i < attempts; i++) {
+    res = await pwFetch(url, init);
+    if (res.ok || !RETRYABLE_STATUSES.has(res.status) || i === attempts - 1) return res;
+    await new Promise((resolve) => setTimeout(resolve, 350 * (i + 1)));
+  }
+  return res!;
+}
+
 const SEARCH_URL = 'https://hudoc.echr.coe.int/app/query/results';
 const CONTENT_URL = 'https://hudoc.echr.coe.int/app/conversion/docx/html/body';
 
@@ -856,9 +889,14 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<un
       const select = 'itemid,docname,doctype,importance,originatingbody,kpdate,article,respondent,conclusion,extractedappno';
       const url = `${SEARCH_URL}?query=${encodeURIComponent(clauses.join(' AND '))}&select=${select}&sort=kpdate%20Descending&start=0&length=${limit}`;
 
-      const res = await pwFetch(url, { headers: { Accept: 'application/json' } });
+      const res = await pwFetchWithRetry(url, { headers: { Accept: 'application/json' } });
       if (!res.ok) throw await httpError(res, 'HUDOC');
-      const json = (await res.json()) as { resultcount?: number; results?: Array<{ columns: Record<string, string | null> }> };
+      // parseJson, not a raw res.json(): hudoc.echr.coe.int is Cloudflare-fronted
+      // and its bot-defense challenge page has been observed served under a 2xx
+      // in other Cloudflare-fronted sources — a raw res.json() on that body
+      // throws an unclassified "Unexpected token '<'" that reads as our bug
+      // rather than a transport failure. See shared/src/http.ts's parseJson doc.
+      const json = await parseJson<{ resultcount?: number; results?: Array<{ columns: Record<string, string | null> }> }>(res, 'HUDOC');
 
       const results = (json.results ?? []).map((r) => {
         const c = r.columns ?? {};
@@ -896,7 +934,7 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<un
       const offset = Math.max(Number(args.offset) || 0, 0);
 
       const url = `${CONTENT_URL}?library=ECHR&id=${encodeURIComponent(itemid)}`;
-      const res = await pwFetch(url, { headers: { Accept: 'text/html' } });
+      const res = await pwFetchWithRetry(url, { headers: { Accept: 'text/html' } });
 
       if (res.status === 204 || res.status === 404) {
         return {
